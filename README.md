@@ -3,7 +3,7 @@
 ║                                                                  ║
 ║    H Y B R I D R E C                                             ║
 ║    ─────────────────────────────────────────────────────────     ║
-║    Hybrid Recommender System · Leona Goel · VIT 2024–2028        ║
+║    Hybrid Recommender System · Leona Goel       ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
