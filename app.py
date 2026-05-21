@@ -87,6 +87,27 @@ else:
     )
 
 
+    total_weight = alpha + beta + gamma
+    if total_weight == 0:
+        effective_weights = {
+            "α Content": 1 / 3,
+            "β Collaborative": 1 / 3,
+            "γ Sentiment": 1 / 3,
+        }
+        st.warning("All raw weights are zero, so the model will use equal weights.")
+    else:
+        effective_weights = {
+            "α Content": alpha / total_weight,
+            "β Collaborative": beta / total_weight,
+            "γ Sentiment": gamma / total_weight,
+        }
+
+    st.caption("Effective weights used by the model")
+    weight_cols = st.columns(3)
+    for col, (label, value) in zip(weight_cols, effective_weights.items()):
+        col.metric(label, f"{value:.3f}")
+        col.progress(value)
+
     if st.button("Apply Weights", width='stretch'):
         if st.session_state.hybrid_model is not None:
             st.session_state.hybrid_model.set_weights(alpha, beta, gamma)
