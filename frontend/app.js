@@ -799,8 +799,13 @@ function renderProducts(products, append) {
     }
 
     const fragment = document.createDocumentFragment();
-
-    products.forEach((p, i) => {
+    const filteredProducts =
+    state.selectedCategory === 'All Categories'
+        ? products
+        : products.filter(
+            p => p.category === state.selectedCategory
+        );
+    filteredProducts.forEach((p, i) => {
         state.products.push(p);
         const card = document.createElement('div');
         card.className = p.image ? 'product-card' : 'product-card product-card--skeleton';
@@ -1172,6 +1177,15 @@ function bindEvents() {
     els.searchInput.addEventListener('focus', () => {
         if (els.searchInput.value) handleAutocomplete(els.searchInput.value);
     });
+    els.categoryFilter.addEventListener('change', (e) => {
+    state.selectedCategory = e.target.value;
+
+    if (els.searchInput.value.trim()) {
+        loadSearchResults(els.searchInput.value);
+    } else {
+        loadProducts();
+    }
+});
 
     // Close dropdown on outside click
     document.addEventListener('click', (e) => {
@@ -1380,7 +1394,7 @@ async function init() {
 
     // Initialize Supabase client from backend config (no hardcoded keys)
     await initSupabase();
-
+    loadCategories();
     // Run auth and status independently — neither blocks the other
     initAuth().catch((e) => console.warn('Auth error:', e));
     checkStatus().catch((e) => console.warn('Status error:', e));
