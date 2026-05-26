@@ -265,12 +265,14 @@ def read_file(path_or_buffer, file_format=None):
 
 
 def adapt_data(df):
-    """
-    Adapt any DataFrame into unified schema.
-    """
+    """Adapt a preprocessed DataFrame into the unified schema used by all models.
 
-    validate_dataframe(df)
+    This function handles schema adaptation ONLY: column detection,
+    renaming to canonical names, and filling missing required fields.
 
+    It does NOT run preprocessing (encoding, normalisation, deduplication).
+    DatasetManager.load_csv() already calls preprocess() before this
+    function. Running preprocessing a second time here caused:
     raw_columns = df.columns
     raw_title_col = detect_column(
         raw_columns,
@@ -300,17 +302,24 @@ def adapt_data(df):
 
     # Apply preprocessing automatically
 
-    if 'authors' in df.columns or 'publisher' in df.columns:
+    - LabelEncoder re-encoding already-integer columns with a different
+      mapping on every load (inconsistent encodings across sessions).
+    - MinMaxScaler re-scaling an already 0-1 ``rating_normalized`` column,
+      collapsing all rating variance to std == 0 (flat distribution).
 
-        df = preprocess_books_data(df)
+    Correct pipeline order enforced by DatasetManager.load_csv()::
 
-    elif 'user_id' in df.columns and 'rating' in df.columns:
+        raw_df -> preprocess(raw_df) -> adapt_data(preprocessed_df)
 
-        df = preprocess_ratings_data(df)
+    Args:
+        df: A preprocessed DataFrame (output of preprocess()).
 
-    elif 'sentiment' in df.columns:
+    Returns:
+        Tuple of (adapted_df, meta) where adapted_df uses canonical column
+        names and meta is a dict of detected mappings and dataset flags.
+    """
 
-        df = preprocess_sentiment_data(df)
+    validate_dataframe(df)
 
     columns = df.columns
 

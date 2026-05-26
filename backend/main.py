@@ -46,6 +46,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from celery.result import AsyncResult
+from celery_app import celery_app
+from tasks import compute_recommendations
+
+
+# backend/main.py — corrected imports
 from src.data.db import get_supabase, get_supabase_admin
 from src.data.data_adapter import adapt_data, read_file
 from src.model.nlp_engine import batch_analyze, aggregate_sentiment_by_item
@@ -94,6 +100,14 @@ async def csrf_header_dep(
 
 # ── App ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Hybrid Recommender API", version="3.0")
+
+@app.get("/health", tags=["meta"])
+async def health_check():
+    """
+    Liveness probe used by Docker Compose health check.
+    Returns 200 when the server is ready to accept requests.
+    """
+    return JSONResponse({"status": "ok"})
 
 RESPONSE_TIME_HEADER = "X-Response-Time-ms"
 DEFAULT_SLOW_RESPONSE_THRESHOLD_MS = 1000.0
