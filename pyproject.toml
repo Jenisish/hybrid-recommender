@@ -1,0 +1,26 @@
+[tool.ruff]
+# Target Python version
+target-version = "py310"
+
+# Exclude commonly ignored directories
+exclude = [
+    ".git",
+    ".pytest_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+# Set maximum line length to 100 characters (consistent with existing codebase)
+line-length = 100
+
+[tool.ruff.format]
+# Enforce double quotes for formatting (standard Python practice)
+quote-style = "double"
+
+# Use spaces instead of tabs
+indent-style = "space"
+
+# Enforce PEP 8 line wrap style
+line-ending = "auto"
