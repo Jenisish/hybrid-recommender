@@ -1990,6 +1990,11 @@ def create_purchase(
     return {"purchase": result.data}
 # ── Trending Products ───────────────────────────────────────────────
 
+# Hard cap on rows fetched from Supabase in the fallback path.
+# The RPC over-fetches by 3× to allow Bayesian re-ranking, then Python
+# trims to the caller-requested limit. This constant bounds the fallback
+# to prevent OOM under high-volume catalogues when the RPC is unavailable.
+TRENDING_FETCH_LIMIT = int(os.environ.get("TRENDING_FETCH_LIMIT", "500"))
 TRENDING_CACHE = {
     "data": None,
     "timestamp": None,
@@ -2041,77 +2046,150 @@ def get_trending_products(
         .gte("purchased_at", cutoff_date) \
         .execute()
 
-    rows = result.data or []
+# Cache TTL for trending results (seconds). Separate from CACHE_TTL_SECONDS
+# because trending data is expensive to compute and changes slowly.
+TRENDING_CACHE_TTL = int(os.environ.get("TRENDING_CACHE_TTL", "3600"))
 
-    if not rows:
-        return {"results": []}
 
-    from collections import defaultdict
+def _bayesian_rank(stats: dict, requested_limit: int) -> list:
+    """Apply Bayesian average scoring to aggregated purchase stats.
 
-    stats = defaultdict(lambda: {
-        "count": 0,
-        "ratings": [],
-        "product": None,
-    })
+    Args:
+        stats: mapping of product_id → {count, ratings, product} dicts.
+        requested_limit: how many results the caller wants.
 
-    for row in rows:
-        product = row.get("products")
-
-        if not product:
-            continue
-
-        pid = product["id"]
-
-        stats[pid]["count"] += 1
-        stats[pid]["ratings"].append(row.get("rating", 0))
-        stats[pid]["product"] = product
-
-    # Bayesian ranking
-    ranked = []
+    Returns:
+        List of ranked product dicts, sorted by trending_score descending,
+        trimmed to requested_limit.
+    """
+    if not stats:
+        return []
 
     global_avg = sum(
         sum(v["ratings"]) / max(len(v["ratings"]), 1)
         for v in stats.values()
     ) / max(len(stats), 1)
 
-    m = 5  # minimum votes threshold
+    # m is the minimum-vote threshold for Bayesian shrinkage.
+    # Keeps single-purchase products from floating to the top.
+    m = 5
 
-    for pid, data in stats.items():
-        count = data["count"]
-        avg_rating = (
-            sum(data["ratings"]) / max(len(data["ratings"]), 1)
-        )
-
+    ranked = []
+    for pid, entry in stats.items():
+        count = entry["count"]
+        avg_rating = sum(entry["ratings"]) / max(len(entry["ratings"]), 1)
         bayesian_rating = (
             (count / (count + m)) * avg_rating
             + (m / (count + m)) * global_avg
         )
-
         score = bayesian_rating * count
-
+        product = entry["product"]
         ranked.append({
-            "id": data["product"]["id"],
-            "title": data["product"]["title"],
-            "category": data["product"].get("category", ""),
-            "rating": data["product"].get("rating", 0),
-            "avg_sentiment": data["product"].get("avg_sentiment", 0),
-            "review_count": data["product"].get("review_count", 0),
+            "id": product["id"],
+            "title": product["title"],
+            "category": product.get("category", ""),
+            "rating": product.get("rating", 0),
+            "avg_sentiment": product.get("avg_sentiment", 0),
+            "review_count": product.get("review_count", 0),
             "interaction_count": count,
             "bayesian_rating": round(bayesian_rating, 3),
             "trending_score": round(score, 3),
         })
 
-    ranked.sort(
-        key=lambda x: x["trending_score"],
-        reverse=True
-    )
+    ranked.sort(key=lambda x: x["trending_score"], reverse=True)
+    return ranked[:requested_limit]
 
-    response = {
-        "results": ranked[:limit],
-        "days": days,
-        "limit": limit,
-    }
 
+def _aggregate_purchase_rows(rows: list) -> dict:
+    """Aggregate raw purchase rows into per-product stats dicts."""
+    stats: dict = defaultdict(lambda: {"count": 0, "ratings": [], "product": None})
+    for row in rows:
+        product = row.get("products")
+        if not product:
+            continue
+        pid = product["id"]
+        stats[pid]["count"] += 1
+        stats[pid]["ratings"].append(row.get("rating") or 0)
+        stats[pid]["product"] = product
+    return dict(stats)
+
+
+@app.get("/api/trending")
+def get_trending_products(
+    days: int = Query(7, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=100),
+):
+    """Return trending products ranked by Bayesian-weighted purchase frequency."""
+    # Cache key is scoped to (days, limit) so different parameter combinations
+    # never overwrite each other's result.
+    cache_key = _cache_key("trending", days, limit)
+    cached = _get_cached_response(cache_key)
+    if cached is not None:
+        return cached
+
+    sb = get_supabase()
+    now = datetime.now(timezone.utc)
+    cutoff_date = (now - timedelta(days=days)).isoformat()
+
+    # Attempt database-side aggregation via RPC first.  The RPC returns one
+    # row per product (purchase_count + avg_rating), so only ~limit*3 rows
+    # cross the network instead of every raw purchase row.
+    rows = None
+    try:
+        rpc_result = sb.rpc(
+            "get_trending_products",
+            {"cutoff_date": cutoff_date, "limit_n": limit * 3},
+        ).execute()
+        if rpc_result.data is not None:
+            rows = rpc_result.data
+    except Exception:
+        rows = None
+
+    if rows is not None:
+        # RPC already aggregated; build a stats dict from the pre-summed rows.
+        stats: dict = {}
+        for r in rows:
+            pid = r.get("product_id")
+            if pid is None:
+                continue
+            stats[pid] = {
+                "count": int(r.get("purchase_count", 0)),
+                "ratings": [float(r.get("avg_rating", 0))] * max(int(r.get("purchase_count", 1)), 1),
+                "product": {
+                    "id": pid,
+                    "title": r.get("title", ""),
+                    "category": r.get("category", ""),
+                    "rating": r.get("rating", 0),
+                    "avg_sentiment": r.get("avg_sentiment", 0),
+                    "review_count": r.get("review_count", 0),
+                },
+            }
+    else:
+        # Fallback: fetch raw purchase rows with a hard row cap to prevent OOM.
+        # The cap (TRENDING_FETCH_LIMIT) bounds memory usage to a known maximum
+        # even when the RPC function has not been deployed yet.
+        try:
+            fallback_result = (
+                sb.table("purchases")
+                .select(
+                    "product_id, rating, purchased_at, "
+                    "products(id, title, category, rating, avg_sentiment, review_count)"
+                )
+                .gte("purchased_at", cutoff_date)
+                .limit(TRENDING_FETCH_LIMIT)
+                .execute()
+            )
+            raw_rows = fallback_result.data or []
+        except Exception as exc:
+            logger.error("Trending fallback query failed: %s", exc)
+            raw_rows = []
+
+        stats = _aggregate_purchase_rows(raw_rows)
+
+    if not stats:
+        response: dict = {"results": [], "days": days, "limit": limit}
+        _set_cached_response(cache_key, response)
+        return response
     if isinstance(TRENDING_CACHE, dict):
         TRENDING_CACHE.pop("data", None)
         TRENDING_CACHE.pop("timestamp", None)
@@ -2119,6 +2197,9 @@ def get_trending_products(
     else:
         TRENDING_CACHE = {cache_key: (now, response)}
 
+    ranked = _bayesian_rank(stats, limit)
+    response = {"results": ranked, "days": days, "limit": limit}
+    _set_cached_response(cache_key, response)
     return response
 
 # ── Feedback ──────────────────────────────────────────────────────────
