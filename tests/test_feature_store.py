@@ -27,3 +27,19 @@ def test_missing_user_returns_none(tmp_path):
 def test_missing_item_returns_none(tmp_path):
     store = FeatureStore(store_path=str(tmp_path))
     assert store.get_item_embedding("unknown_item") is None
+
+def test_save_user_embedding_overwrites_existing(tmp_path):
+    store = FeatureStore(store_path=str(tmp_path))
+    vec1 = np.array([0.1, 0.2, 0.3])
+    vec2 = np.array([0.9, 0.8, 0.7])
+    store.save_user_embedding("user_123", vec1)
+    store.save_user_embedding("user_123", vec2)
+    assert np.allclose(store.get_user_embedding("user_123"), vec2)
+
+def test_save_item_embedding_overwrites_existing(tmp_path):
+    store = FeatureStore(store_path=str(tmp_path))
+    vec1 = np.array([1.1, 1.2, 1.3])
+    vec2 = np.array([1.9, 1.8, 1.7])
+    store.save_item_embedding("item_123", vec1)
+    store.save_item_embedding("item_123", vec2)
+    assert np.allclose(store.get_item_embedding("item_123"), vec2)
