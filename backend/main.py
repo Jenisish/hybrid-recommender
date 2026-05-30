@@ -176,19 +176,14 @@ def _get_cached_response(key: str):
 
 
 def _set_cached_response(key: str, value: Any) -> None:
-    with _cache_lock:
-        _response_cache[key] = (time.time() + CACHE_TTL_SECONDS, value)
-        # track misses -> when we set a value it was previously a miss for the next requests
-        # metric updated in _get_cached_response when read.
-
+    try:
+        if _redis_client:
+            _redis_client.set(key, value)
     except (RedisError, TypeError):
         pass
 
     with _cache_lock:
-        _response_cache[key] = (
-            time.time() + CACHE_TTL_SECONDS,
-            value,
-        )
+        _response_cache[key] = (time.time() + CACHE_TTL_SECONDS, value)
 
 def _clear_response_cache() -> None:
     with _cache_lock:
