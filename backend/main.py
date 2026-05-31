@@ -260,17 +260,8 @@ def _set_cached_response(key: str, value: Any) -> None:
 
 
 def _set_cached_response(key: str, value: Any) -> None:
-    if _redis_client is not None:
-        try:
-            _redis_client.setex(key, CACHE_TTL_SECONDS, json.dumps(value))
-        except (RedisError, TypeError):
-            pass
-
     with _cache_lock:
-        _response_cache[key] = (
-            time.time() + CACHE_TTL_SECONDS,
-            value,
-        )
+        _response_cache[key] = (time.time() + CACHE_TTL_SECONDS, value)
 
 def _clear_response_cache() -> None:
     _response_cache.clear()
@@ -1223,7 +1214,6 @@ async def upload_dataset(
     admin=Depends(_require_admin_access),
 ):
     """Upload a CSV or JSON dataset and import into Supabase."""
-    import math
     filename = file.filename or "data.csv"
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ('.csv', '.json'):
@@ -1836,7 +1826,7 @@ def similarity_matrix(items: str = Query(...)):
 
 # ── Weights ───────────────────────────────────────────────────────────
 @app.get("/api/models")
-def list_models():
+def list_models(_admin: None = Depends(_admin_access_dep)):
     return {
         "active_model": ACTIVE_MODEL_VERSION,
         "shadow_model": SHADOW_MODEL_VERSION,
@@ -1920,7 +1910,7 @@ def move_model_to_shadow(
     }
 
 @app.get("/api/weights")
-def get_weights():
+def get_weights(_admin: None = Depends(_admin_access_dep)):
     if not models["ready"]:
         return {"alpha": 0.5, "beta": 0.3, "gamma": 0.2}
     return models["hybrid"].get_weights()
