@@ -19,6 +19,20 @@ import json
 from redis import Redis
 from redis.exceptions import RedisError
 
+# Initialise Redis client; falls back to None if unavailable so the
+# in-memory cache is used instead.
+try:
+    _redis_client: Redis | None = Redis(
+        host=os.environ.get("REDIS_HOST", "localhost"),
+        port=int(os.environ.get("REDIS_PORT", 6379)),
+        db=int(os.environ.get("REDIS_DB", 0)),
+        decode_responses=True,
+        socket_connect_timeout=2,
+    )
+    _redis_client.ping()
+except Exception:
+    _redis_client = None
+
 try:
     import bleach
 except ModuleNotFoundError:
@@ -82,6 +96,8 @@ from collaborative_model import CollaborativeRecommender
 from hybrid_model import HybridRecommender
 
 # ── App ──────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Hybrid Recommender API", version="3.0")
 
 @app.on_event("startup")
@@ -217,8 +233,13 @@ def _set_cached_response(key: str, value: Any) -> None:
         if cached is not None:
             return json.loads(cached)
 
-    except (RedisError, json.JSONDecodeError):
-        pass
+    if _redis_client is not None:
+        try:
+            cached = _redis_client.get(key)
+            if cached is not None:
+                return json.loads(cached)
+        except (RedisError, json.JSONDecodeError):
+            pass
 
     with _cache_lock:
         cached = _response_cache.get(key)
@@ -239,10 +260,11 @@ def _set_cached_response(key: str, value: Any) -> None:
 
 
 def _set_cached_response(key: str, value: Any) -> None:
-    try:
-        _redis_client.setex(key, CACHE_TTL_SECONDS, json.dumps(value))
-    except (RedisError, TypeError):
-        pass
+    if _redis_client is not None:
+        try:
+            _redis_client.setex(key, CACHE_TTL_SECONDS, json.dumps(value))
+        except (RedisError, TypeError):
+            pass
 
     with _cache_lock:
         _response_cache[key] = (
@@ -1197,7 +1219,8 @@ def _validate_upload_bytes(filename: str, ext: str, contents: bytes) -> None:
 @app.post("/api/upload")
 async def upload_dataset(
     file: UploadFile = File(...),
-    admin=Depends(_require_admin_access)
+    _csrf: None = Depends(csrf_header_dep),
+    admin=Depends(_require_admin_access),
 ):
     """Upload a CSV or JSON dataset and import into Supabase."""
     import math
