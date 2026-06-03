@@ -60,15 +60,67 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from db import get_supabase, get_supabase_admin
-from backend.auth import _require_admin_access
-from data_adapter import adapt_data, read_file
-from nlp_engine import batch_analyze, aggregate_sentiment_by_item
-from content_model import ContentRecommender
-from collaborative_model import CollaborativeRecommender
-from hybrid_model import HybridRecommender
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(asctime)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-# ── App ──────────────────────────────────────────────────────────────
+from celery.result import AsyncResult
+from celery_app import celery_app
+from tasks import compute_recommendations
+
+
+# backend/main.py — corrected imports
+from src.data.db import get_supabase, get_supabase_admin
+from src.data.data_adapter import adapt_data, read_file
+from src.model.nlp_engine import batch_analyze, aggregate_sentiment_by_item
+from src.model.content_model import ContentRecommender
+from src.model.collaborative_model import CollaborativeRecommender
+from src.model.hybrid_model import HybridRecommender
+from src.model.issue_triage import triage_issue
+from src.model.federated_learning import train_federated_collaborative_model
+
+from functools import lru_cache
+
+from backend.csrf import CSRFMiddleware, generate_csrf_token, set_csrf_cookie, CSRFTokenResponse
+
+
+# ── OpenAPI CSRF header dependency ────────────────────────────────────
+# WHY a Depends() instead of just relying on the middleware?
+#
+# The CSRFMiddleware enforces the token at the ASGI level — it never
+# touches the OpenAPI schema that FastAPI builds from route signatures.
+# Swagger UI only renders parameters that appear in the schema, so the
+# X-CSRF-Token field is invisible to users testing the API interactively.
+#
+# This dependency solves that purely at the documentation layer:
+#   - It declares X-CSRF-Token as a required header parameter on every
+#     route that includes Depends(csrf_header_dep).
+#   - FastAPI adds it to the OpenAPI spec → Swagger UI renders the field.
+#   - The function body does nothing (returns None) because the middleware
+#     has already validated the token before the route handler runs.
+#   - No double-validation, no logic duplication.
+#
+# The `alias="X-CSRF-Token"` preserves the canonical mixed-case header
+# name in the OpenAPI spec so Swagger UI labels it correctly, even though
+# Starlette lowercases all incoming headers internally.
+async def csrf_header_dep(
+    x_csrf_token: str = Header(
+        ...,
+        alias="X-CSRF-Token",
+        description=(
+            "CSRF token obtained from **GET /api/csrf-token**. "
+            "Required on all state-mutating requests (POST / PUT / PATCH / DELETE). "
+            "Must match the value stored in the `csrftoken` cookie."
+        ),
+    ),
+) -> None:
+    """Declares X-CSRF-Token in OpenAPI. Enforcement is done by CSRFMiddleware."""
+    # The middleware has already validated the token before this runs.
+    # This function exists solely to make the header visible in Swagger UI.
+
+app = FastAPI(title="Hybrid Recommender API", version="3.0")
 app = FastAPI(title="Hybrid Recommender API", version="3.0")
 
 @app.on_event("startup")
