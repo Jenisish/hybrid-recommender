@@ -1993,6 +1993,12 @@ def get_trending_products(
     # Cache for 1 hour
     now = datetime.now(timezone.utc)
 
+    if (
+        (now - TRENDING_CACHE["timestamp"]).seconds < 3600
+        TRENDING_CACHE["timestamp"] is not None and
+        (now - TRENDING_CACHE["timestamp"]).total_seconds() < 3600
+    ):
+        return TRENDING_CACHE["data"]
     cache_key = (days, limit)
     if isinstance(TRENDING_CACHE, dict) and "data" in TRENDING_CACHE and TRENDING_CACHE["data"] is None:
         cached_val = None
