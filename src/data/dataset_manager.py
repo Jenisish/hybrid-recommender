@@ -13,6 +13,7 @@ Fixes vs. original:
 
 import os
 import uuid
+import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 from src.data.data_adapter import adapt_data, read_file
 from src.data.data_preprocessing import preprocess
