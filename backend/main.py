@@ -224,6 +224,8 @@ def _get_cached_response(key: str):
             if cached is not None:
                 _cache_hits += 1
                 return json.loads(cached)
+        except Exception:
+            pass
 
     with _cache_lock:
         cached = _response_cache.get(key)
@@ -1533,7 +1535,19 @@ async def recommend_item(
 
             if item_df is not None and not item_df.empty:
                 content_model = ContentRecommender(item_df)
-                collab_model = CollaborativeRecommender(interaction_df) if interaction_df is not None and not interaction_df.empty else None
+                
+                import os
+                from src.model.neural_collaborative_model import NeuralCollaborativeRecommender
+                use_ncf = os.getenv("USE_NCF", "true").lower() == "true"
+                
+                if interaction_df is not None and not interaction_df.empty:
+                    if use_ncf:
+                        collab_model = NeuralCollaborativeRecommender(interaction_df)
+                    else:
+                        collab_model = CollaborativeRecommender(interaction_df)
+                else:
+                    collab_model = None
+                
                 hybrid = HybridRecommender(content_model, collab_model, item_df)
                 all_results = hybrid.recommend(title=title, user_id=user_id or None, top_n=limit + offset)
         except Exception:
@@ -2439,19 +2453,18 @@ def get_categories():
         return {"categories": []}
     
     @app.post("/api/interactions")
-def log_interaction(data: InteractionCreate):
+    def log_interaction(data: InteractionCreate):
+        USER_INTERACTIONS.append({
+            "user_id": data.user_id,
+            "item_id": data.item_id,
+            "interaction_type": data.interaction_type,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
 
-    USER_INTERACTIONS.append({
-        "user_id": data.user_id,
-        "item_id": data.item_id,
-        "interaction_type": data.interaction_type,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-
-    return {
-        "message": "Interaction logged successfully",
-        "interaction": USER_INTERACTIONS[-1]
-    }
+        return {
+            "message": "Interaction logged successfully",
+            "interaction": USER_INTERACTIONS[-1]
+        }
 
 
 # ── Purchases ─────────────────────────────────────────────────────────
