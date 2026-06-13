@@ -16,12 +16,8 @@ import math
 import secrets
 
 import json
-# RedisError is resolved here for use in except clauses;
-# the Redis client itself is imported inside the init block below.
-try:
-    from redis.exceptions import RedisError
-except ImportError:
-    RedisError = Exception
+from redis import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +197,6 @@ _redis_client = None
 
 _redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 try:
-    from redis import Redis
-
     _redis_client = Redis.from_url(_redis_url, decode_responses=True, socket_connect_timeout=2)
     _redis_client.ping()
     logger.info("Redis connected at %s", _redis_url)
