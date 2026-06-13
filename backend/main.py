@@ -16,8 +16,12 @@ import math
 import secrets
 
 import json
-from redis import Redis
-from redis.exceptions import RedisError
+# RedisError is resolved here for use in except clauses;
+# the Redis client itself is imported inside the init block below.
+try:
+    from redis.exceptions import RedisError
+except ImportError:
+    RedisError = Exception
 
 logger = logging.getLogger(__name__)
 
@@ -193,8 +197,12 @@ _request_counter = 0
 _cache_lock = Lock()
 
 # ── Redis client ──────────────────────────────────────────────────────
+_redis_client = None
+
 _redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 try:
+    from redis import Redis
+
     _redis_client = Redis.from_url(_redis_url, decode_responses=True, socket_connect_timeout=2)
     _redis_client.ping()
     logger.info("Redis connected at %s", _redis_url)
@@ -675,9 +683,28 @@ def health_check():
     Checks database (Supabase), model readiness, and cache (Redis).
     """
     from src.data.db import get_supabase
-    from redis import Redis
-    from redis.exceptions import RedisError
-    import os
+
+    redis_ok = False
+    if _redis_client is not None:
+        try:
+            _redis_client.ping()
+            redis_ok = True
+        except Exception:
+            pass
+
+    db_ok = False
+    try:
+        get_supabase()
+        db_ok = True
+    except Exception:
+        pass
+
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "database": db_ok,
+        "redis": redis_ok,
+        "models_ready": models.get("ready", False),
+    }
 
 def _set_cached_response(key: str, value: Any) -> None:
     if _redis_client is not None:
@@ -2596,8 +2623,6 @@ def get_categories():
         logger.error("Failed to retrieve categories: %s", e)
         return {"categories": []}
     
-    @app.post("/api/interactions")
-    def log_interaction(data: InteractionCreate):
 @app.post("/api/interactions")
 def log_interaction(data: InteractionCreate):
 
